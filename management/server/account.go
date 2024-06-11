@@ -38,13 +38,13 @@ import (
 )
 
 const (
-	PublicCategory             		= "public"
-	PrivateCategory            		= "private"
-	UnknownCategory            		= "unknown"
-	CacheExpirationMax         		= 7 * 24 * 3600 * time.Second // 7 days
-	CacheExpirationMin         		= 3 * 24 * 3600 * time.Second // 3 days
-	DefaultPeerLoginExpiration 		= 24 * time.Hour
-	DefaultPeerInactivityExpiration = 20 * time.Second
+	PublicCategory                  = "public"
+	PrivateCategory                 = "private"
+	UnknownCategory                 = "unknown"
+	CacheExpirationMax              = 7 * 24 * 3600 * time.Second // 7 days
+	CacheExpirationMin              = 3 * 24 * 3600 * time.Second // 3 days
+	DefaultPeerLoginExpiration      = 24 * time.Hour
+	DefaultPeerInactivityExpiration = 1 * time.Second
 )
 
 type userLoggedInOnce bool
@@ -170,13 +170,16 @@ type DefaultAccountManager struct {
 type Settings struct {
 	// PeerLoginExpirationEnabled globally enables or disables peer login expiration
 	PeerLoginExpirationEnabled bool
-	
+
 	// PeerLoginExpiration is a setting that indicates when peer login expires.
 	// Applies to all peers that have Peer.LoginExpirationEnabled set to true.
 	PeerLoginExpiration time.Duration
 
+	// PeerInactivityExpirationEnabled globally enables or disables peer inactivity expiration
 	PeerInactivityExpirationEnabled bool
 
+	// PeerInactivityExpiration is a setting that indicates when peer inactivity expires.
+	// Applies to all peers that have Peer.PeerInactivityExpirationEnabled set to true.
 	PeerInactivityExpiration time.Duration
 
 	// RegularUsersViewBlocked allows to block regular users from viewing even their own peers and some UI elements
@@ -202,15 +205,15 @@ type Settings struct {
 // Copy copies the Settings struct
 func (s *Settings) Copy() *Settings {
 	settings := &Settings{
-		PeerLoginExpirationEnabled: 	 s.PeerLoginExpirationEnabled,
-		PeerLoginExpiration:        	 s.PeerLoginExpiration,
+		PeerLoginExpirationEnabled:      s.PeerLoginExpirationEnabled,
+		PeerLoginExpiration:             s.PeerLoginExpiration,
 		PeerInactivityExpirationEnabled: s.PeerInactivityExpirationEnabled,
-		PeerInactivityExpiration:   	 s.PeerInactivityExpiration,
-		JWTGroupsEnabled:           	 s.JWTGroupsEnabled,
-		JWTGroupsClaimName:         	 s.JWTGroupsClaimName,
-		GroupsPropagationEnabled:   	 s.GroupsPropagationEnabled,
-		JWTAllowGroups:             	 s.JWTAllowGroups,
-		RegularUsersViewBlocked:    	 s.RegularUsersViewBlocked,
+		PeerInactivityExpiration:        s.PeerInactivityExpiration,
+		JWTGroupsEnabled:                s.JWTGroupsEnabled,
+		JWTGroupsClaimName:              s.JWTGroupsClaimName,
+		GroupsPropagationEnabled:        s.GroupsPropagationEnabled,
+		JWTAllowGroups:                  s.JWTAllowGroups,
+		RegularUsersViewBlocked:         s.RegularUsersViewBlocked,
 	}
 	if s.Extra != nil {
 		settings.Extra = s.Extra.Copy()
@@ -510,6 +513,7 @@ func (a *Account) GetPeersWithExpiration() []*nbpeer.Peer {
 	return peers
 }
 
+// GetExpiredPeers returns peers that have been expired by inactivity
 func (a *Account) GetInactivePeers() []*nbpeer.Peer {
 	var peers []*nbpeer.Peer
 	for _, inactivePeer := range a.GetPeersWithInactivity() {
@@ -522,6 +526,9 @@ func (a *Account) GetInactivePeers() []*nbpeer.Peer {
 	return peers
 }
 
+// GetNextInactivePeerExpiration returns the minimum duration in which the next peer of the account will expire if it was found.
+// If there is no peer that expires this function returns false and a duration of 0.
+// This function only considers peers that haven't been expired yet and that are connected.
 func (a *Account) GetNextInactivePeerExpiration() (time.Duration, bool) {
 	peersWithExpiry := a.GetPeersWithInactivity()
 	if len(peersWithExpiry) == 0 {
@@ -530,7 +537,7 @@ func (a *Account) GetNextInactivePeerExpiration() (time.Duration, bool) {
 	var nextExpiry *time.Duration
 	for _, peer := range peersWithExpiry {
 		// consider only connected peers because others will require login on connecting to the management server
-		if peer.Status.LoginExpired {
+		if peer.Status.LoginExpired || peer.Status.Connected {
 			continue
 		}
 		_, duration := peer.SessionExpired(a.Settings.PeerInactivityExpiration)
@@ -2134,12 +2141,12 @@ func newAccountWithId(accountID, userID, domain string) *Account {
 		NameServerGroups: nameServersGroups,
 		DNSSettings:      dnsSettings,
 		Settings: &Settings{
-			PeerLoginExpirationEnabled:		 true,
-			PeerLoginExpiration:			 DefaultPeerLoginExpiration,
+			PeerLoginExpirationEnabled:      true,
+			PeerLoginExpiration:             DefaultPeerLoginExpiration,
 			PeerInactivityExpirationEnabled: true,
-			PeerInactivityExpiration: 		 DefaultPeerInactivityExpiration,
-			GroupsPropagationEnabled:   	 true,
-			RegularUsersViewBlocked:    	 true,
+			PeerInactivityExpiration:        DefaultPeerInactivityExpiration,
+			GroupsPropagationEnabled:        true,
+			RegularUsersViewBlocked:         true,
 		},
 	}
 
