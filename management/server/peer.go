@@ -144,7 +144,7 @@ func (am *DefaultAccountManager) MarkPeerConnected(peerPubKey string, connected 
 	return nil
 }
 
-// UpdatePeer updates peer. Only Peer.Name, Peer.SSHEnabled, and Peer.LoginExpirationEnabled can be updated.
+// UpdatePeer updates peer. Only Peer.Name, Peer.SSHEnabled, Peer.LoginExpirationEnabled and Peer.InactivityExpirationEnabled can be updated.
 func (am *DefaultAccountManager) UpdatePeer(accountID, userID string, update *nbpeer.Peer) (*nbpeer.Peer, error) {
 	unlock := am.Store.AcquireAccountWriteLock(accountID)
 	defer unlock()
@@ -204,6 +204,25 @@ func (am *DefaultAccountManager) UpdatePeer(accountID, userID string, update *nb
 
 		if peer.AddedWithSSOLogin() && peer.LoginExpirationEnabled && account.Settings.PeerLoginExpirationEnabled {
 			am.checkAndSchedulePeerLoginExpiration(account)
+		}
+	}
+
+	if peer.InactivityExpirationEnabled != update.InactivityExpirationEnabled {
+
+		if !peer.AddedWithSSOLogin() {
+			return nil, status.Errorf(status.PreconditionFailed, "this peer hasn't been added with the SSO login, therefore the login expiration can't be updated")
+		}
+
+		peer.InactivityExpirationEnabled = update.InactivityExpirationEnabled
+
+		event := activity.PeerInactivityExpirationEnabled
+		if !update.InactivityExpirationEnabled {
+			event = activity.PeerInactivityExpirationDisabled
+		}
+		am.StoreEvent(userID, peer.IP.String(), accountID, event, peer.EventMeta(am.GetDNSDomain()))
+
+		if peer.AddedWithSSOLogin() && peer.InactivityExpirationEnabled && account.Settings.PeerInactivityExpirationEnabled {
+			am.checkAndSchedulePeerInactivityExpiration(account)
 		}
 	}
 
@@ -444,10 +463,10 @@ func (am *DefaultAccountManager) AddPeer(setupKey, userID string, peer *nbpeer.P
 		SSHKey:                      peer.SSHKey,
 		LastLogin:                   registrationTime,
 		CreatedAt:                   registrationTime,
-		LoginExpirationEnabled: 	 addedByUser,
+		LoginExpirationEnabled:      addedByUser,
 		InactivityExpirationEnabled: addedByUser,
-		Ephemeral:              	 ephemeral,
-		Location:               	 peer.Location,
+		Ephemeral:                   ephemeral,
+		Location:                    peer.Location,
 	}
 
 	// add peer to 'All' group
