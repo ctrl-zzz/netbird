@@ -157,8 +157,9 @@ type DefaultAccountManager struct {
 	// singleAccountModeDomain is a domain to use in singleAccountMode setup
 	singleAccountModeDomain string
 	// dnsDomain is used for peer resolution. This is appended to the peer's name
-	dnsDomain       string
-	peerLoginExpiry Scheduler
+	dnsDomain            string
+	peerLoginExpiry      Scheduler
+	peerInactivityExpiry Scheduler
 
 	// userDeleteFromIDPEnabled allows to delete user from IDP when user is deleted from account
 	userDeleteFromIDPEnabled bool
@@ -522,7 +523,6 @@ func (a *Account) GetInactivePeers() []*nbpeer.Peer {
 			peers = append(peers, inactivePeer)
 		}
 	}
-
 	return peers
 }
 
@@ -558,7 +558,7 @@ func (a *Account) GetNextInactivePeerExpiration() (time.Duration, bool) {
 	return *nextExpiry, true
 }
 
-// GetInactivePeers returns a list of peers that have Peer.InactivityExpirationEnabled set to true and that were added by a user
+// GetPeersWithInactivityPeers returns a list of peers that have Peer.InactivityExpirationEnabled set to true and that were added by a user
 func (a *Account) GetPeersWithInactivity() []*nbpeer.Peer {
 	peers := make([]*nbpeer.Peer, 0)
 	for _, peer := range a.Peers {
@@ -947,6 +947,7 @@ func BuildManager(store Store, peersUpdateManager *PeersUpdateManager, idpManage
 		dnsDomain:                dnsDomain,
 		eventStore:               eventStore,
 		peerLoginExpiry:          NewDefaultScheduler(),
+		peerInactivityExpiry:     NewDefaultScheduler(),
 		userDeleteFromIDPEnabled: userDeleteFromIDPEnabled,
 		integratedPeerValidator:  integratedPeerValidator,
 	}
@@ -1071,6 +1072,22 @@ func (am *DefaultAccountManager) UpdateAccountSettings(accountID, userID string,
 		am.checkAndSchedulePeerLoginExpiration(account)
 	}
 
+	if oldSettings.PeerInactivityExpirationEnabled != newSettings.PeerInactivityExpirationEnabled {
+		event := activity.AccountPeerInactivityExpirationEnabled
+		if !newSettings.PeerInactivityExpirationEnabled {
+			event = activity.AccountPeerInactivityExpirationDisabled
+			am.peerInactivityExpiry.Cancel([]string{accountID})
+		} else {
+			am.checkAndSchedulePeerInactivityExpiration(account)
+		}
+		am.StoreEvent(userID, accountID, accountID, event, nil)
+	}
+
+	if oldSettings.PeerInactivityExpiration != newSettings.PeerInactivityExpiration {
+		am.StoreEvent(userID, accountID, accountID, activity.AccountPeerInactivityExpirationDurationUpdated, nil)
+		am.checkAndSchedulePeerInactivityExpiration(account)
+	}
+
 	updatedAccount := account.UpdateSettings(newSettings)
 
 	err = am.Store.SaveAccount(account)
@@ -1145,9 +1162,9 @@ func (am *DefaultAccountManager) peerInactivityExpirationJob(accountID string) f
 }
 
 func (am *DefaultAccountManager) checkAndSchedulePeerInactivityExpiration(account *Account) {
-	am.peerLoginExpiry.Cancel([]string{account.Id})
+	am.peerInactivityExpiry.Cancel([]string{account.Id})
 	if nextRun, ok := account.GetNextInactivePeerExpiration(); ok {
-		go am.peerLoginExpiry.Schedule(nextRun, account.Id, am.peerInactivityExpirationJob(account.Id))
+		go am.peerInactivityExpiry.Schedule(nextRun, account.Id, am.peerInactivityExpirationJob(account.Id))
 	}
 }
 

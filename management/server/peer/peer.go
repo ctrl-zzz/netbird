@@ -199,7 +199,7 @@ func (p *Peer) MarkLoginExpired(expired bool) {
 // Session expiration can also be disabled/enabled globally on the Account level via Settings.PeerLoginExpirationEnabled.
 // Only peers added by interactive SSO login can be expired.
 func (p *Peer) SessionExpired(expiresIn time.Duration) (bool, time.Duration) {
-	if !p.AddedWithSSOLogin() || !p.InactivityExpirationEnabled {
+	if !p.AddedWithSSOLogin() || !p.InactivityExpirationEnabled || p.Status.Connected {
 		return false, 0
 	}
 	expiresAt := p.Status.LastSeen.Add(expiresIn)

@@ -142,6 +142,10 @@ const (
 
 	PeerInactivityExpirationEnabled  Activity = 63
 	PeerInactivityExpirationDisabled Activity = 64
+
+	AccountPeerInactivityExpirationEnabled         Activity = 65
+	AccountPeerInactivityExpirationDisabled        Activity = 66
+	AccountPeerInactivityExpirationDurationUpdated Activity = 67
 )
 
 var activityMap = map[Activity]Code{
