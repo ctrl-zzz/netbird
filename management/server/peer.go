@@ -131,6 +131,10 @@ func (am *DefaultAccountManager) MarkPeerConnected(peerPubKey string, connected 
 		am.checkAndSchedulePeerLoginExpiration(account)
 	}
 
+	if peer.AddedWithSSOLogin() && peer.InactivityExpirationEnabled && account.Settings.PeerInactivityExpirationEnabled {
+		am.checkAndSchedulePeerInactivityExpiration(account)
+	}
+
 	if oldStatus.LoginExpired {
 		// we need to update other peers because when peer login expires all other peers are notified to disconnect from
 		// the expired one. Here we notify them that connection is now allowed again.
@@ -427,22 +431,23 @@ func (am *DefaultAccountManager) AddPeer(setupKey, userID string, peer *nbpeer.P
 	registrationTime := time.Now().UTC()
 
 	newPeer := &nbpeer.Peer{
-		ID:                     xid.New().String(),
-		Key:                    peer.Key,
-		SetupKey:               upperKey,
-		IP:                     nextIp,
-		Meta:                   peer.Meta,
-		Name:                   peer.Meta.Hostname,
-		DNSLabel:               newLabel,
-		UserID:                 userID,
-		Status:                 &nbpeer.PeerStatus{Connected: false, LastSeen: registrationTime},
-		SSHEnabled:             false,
-		SSHKey:                 peer.SSHKey,
-		LastLogin:              registrationTime,
-		CreatedAt:              registrationTime,
-		LoginExpirationEnabled: addedByUser,
-		Ephemeral:              ephemeral,
-		Location:               peer.Location,
+		ID:                          xid.New().String(),
+		Key:                         peer.Key,
+		SetupKey:                    upperKey,
+		IP:                          nextIp,
+		Meta:                        peer.Meta,
+		Name:                        peer.Meta.Hostname,
+		DNSLabel:                    newLabel,
+		UserID:                      userID,
+		Status:                      &nbpeer.PeerStatus{Connected: false, LastSeen: registrationTime},
+		SSHEnabled:                  false,
+		SSHKey:                      peer.SSHKey,
+		LastLogin:                   registrationTime,
+		CreatedAt:                   registrationTime,
+		LoginExpirationEnabled: 	 addedByUser,
+		InactivityExpirationEnabled: addedByUser,
+		Ephemeral:              	 ephemeral,
+		Location:               	 peer.Location,
 	}
 
 	// add peer to 'All' group

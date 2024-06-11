@@ -38,12 +38,13 @@ import (
 )
 
 const (
-	PublicCategory             = "public"
-	PrivateCategory            = "private"
-	UnknownCategory            = "unknown"
-	CacheExpirationMax         = 7 * 24 * 3600 * time.Second // 7 days
-	CacheExpirationMin         = 3 * 24 * 3600 * time.Second // 3 days
-	DefaultPeerLoginExpiration = 24 * time.Hour
+	PublicCategory             		= "public"
+	PrivateCategory            		= "private"
+	UnknownCategory            		= "unknown"
+	CacheExpirationMax         		= 7 * 24 * 3600 * time.Second // 7 days
+	CacheExpirationMin         		= 3 * 24 * 3600 * time.Second // 3 days
+	DefaultPeerLoginExpiration 		= 24 * time.Hour
+	DefaultPeerInactivityExpiration = 20 * time.Second
 )
 
 type userLoggedInOnce bool
@@ -169,10 +170,14 @@ type DefaultAccountManager struct {
 type Settings struct {
 	// PeerLoginExpirationEnabled globally enables or disables peer login expiration
 	PeerLoginExpirationEnabled bool
-
+	
 	// PeerLoginExpiration is a setting that indicates when peer login expires.
 	// Applies to all peers that have Peer.LoginExpirationEnabled set to true.
 	PeerLoginExpiration time.Duration
+
+	PeerInactivityExpirationEnabled bool
+
+	PeerInactivityExpiration time.Duration
 
 	// RegularUsersViewBlocked allows to block regular users from viewing even their own peers and some UI elements
 	RegularUsersViewBlocked bool
@@ -197,13 +202,15 @@ type Settings struct {
 // Copy copies the Settings struct
 func (s *Settings) Copy() *Settings {
 	settings := &Settings{
-		PeerLoginExpirationEnabled: s.PeerLoginExpirationEnabled,
-		PeerLoginExpiration:        s.PeerLoginExpiration,
-		JWTGroupsEnabled:           s.JWTGroupsEnabled,
-		JWTGroupsClaimName:         s.JWTGroupsClaimName,
-		GroupsPropagationEnabled:   s.GroupsPropagationEnabled,
-		JWTAllowGroups:             s.JWTAllowGroups,
-		RegularUsersViewBlocked:    s.RegularUsersViewBlocked,
+		PeerLoginExpirationEnabled: 	 s.PeerLoginExpirationEnabled,
+		PeerLoginExpiration:        	 s.PeerLoginExpiration,
+		PeerInactivityExpirationEnabled: s.PeerInactivityExpirationEnabled,
+		PeerInactivityExpiration:   	 s.PeerInactivityExpiration,
+		JWTGroupsEnabled:           	 s.JWTGroupsEnabled,
+		JWTGroupsClaimName:         	 s.JWTGroupsClaimName,
+		GroupsPropagationEnabled:   	 s.GroupsPropagationEnabled,
+		JWTAllowGroups:             	 s.JWTAllowGroups,
+		RegularUsersViewBlocked:    	 s.RegularUsersViewBlocked,
 	}
 	if s.Extra != nil {
 		settings.Extra = s.Extra.Copy()
@@ -497,6 +504,58 @@ func (a *Account) GetPeersWithExpiration() []*nbpeer.Peer {
 	peers := make([]*nbpeer.Peer, 0)
 	for _, peer := range a.Peers {
 		if peer.LoginExpirationEnabled && peer.AddedWithSSOLogin() {
+			peers = append(peers, peer)
+		}
+	}
+	return peers
+}
+
+func (a *Account) GetInactivePeers() []*nbpeer.Peer {
+	var peers []*nbpeer.Peer
+	for _, inactivePeer := range a.GetPeersWithInactivity() {
+		inactive, _ := inactivePeer.SessionExpired(a.Settings.PeerInactivityExpiration)
+		if inactive {
+			peers = append(peers, inactivePeer)
+		}
+	}
+
+	return peers
+}
+
+func (a *Account) GetNextInactivePeerExpiration() (time.Duration, bool) {
+	peersWithExpiry := a.GetPeersWithInactivity()
+	if len(peersWithExpiry) == 0 {
+		return 0, false
+	}
+	var nextExpiry *time.Duration
+	for _, peer := range peersWithExpiry {
+		// consider only connected peers because others will require login on connecting to the management server
+		if peer.Status.LoginExpired {
+			continue
+		}
+		_, duration := peer.SessionExpired(a.Settings.PeerInactivityExpiration)
+		if nextExpiry == nil || duration < *nextExpiry {
+			// if expiration is below 1s return 1s duration
+			// this avoids issues with ticker that can't be set to < 0
+			if duration < time.Second {
+				return time.Second, true
+			}
+			nextExpiry = &duration
+		}
+	}
+
+	if nextExpiry == nil {
+		return 0, false
+	}
+
+	return *nextExpiry, true
+}
+
+// GetInactivePeers returns a list of peers that have Peer.InactivityExpirationEnabled set to true and that were added by a user
+func (a *Account) GetPeersWithInactivity() []*nbpeer.Peer {
+	peers := make([]*nbpeer.Peer, 0)
+	for _, peer := range a.Peers {
+		if peer.InactivityExpirationEnabled && peer.AddedWithSSOLogin() {
 			peers = append(peers, peer)
 		}
 	}
@@ -1047,6 +1106,41 @@ func (am *DefaultAccountManager) checkAndSchedulePeerLoginExpiration(account *Ac
 	am.peerLoginExpiry.Cancel([]string{account.Id})
 	if nextRun, ok := account.GetNextPeerExpiration(); ok {
 		go am.peerLoginExpiry.Schedule(nextRun, account.Id, am.peerLoginExpirationJob(account.Id))
+	}
+}
+
+func (am *DefaultAccountManager) peerInactivityExpirationJob(accountID string) func() (time.Duration, bool) {
+	return func() (time.Duration, bool) {
+		unlock := am.Store.AcquireAccountWriteLock(accountID)
+		defer unlock()
+
+		account, err := am.Store.GetAccount(accountID)
+		if err != nil {
+			log.Errorf("failed getting account %s expiring peers", account.Id)
+			return account.GetNextInactivePeerExpiration()
+		}
+
+		expiredPeers := account.GetInactivePeers()
+		var peerIDs []string
+		for _, peer := range expiredPeers {
+			peerIDs = append(peerIDs, peer.ID)
+		}
+
+		log.Debugf("discovered %d peers to expire for account %s", len(peerIDs), account.Id)
+
+		if err := am.expireAndUpdatePeers(account, expiredPeers); err != nil {
+			log.Errorf("failed updating account peers while expiring peers for account %s", account.Id)
+			return account.GetNextInactivePeerExpiration()
+		}
+
+		return account.GetNextInactivePeerExpiration()
+	}
+}
+
+func (am *DefaultAccountManager) checkAndSchedulePeerInactivityExpiration(account *Account) {
+	am.peerLoginExpiry.Cancel([]string{account.Id})
+	if nextRun, ok := account.GetNextInactivePeerExpiration(); ok {
+		go am.peerLoginExpiry.Schedule(nextRun, account.Id, am.peerInactivityExpirationJob(account.Id))
 	}
 }
 
@@ -2040,10 +2134,12 @@ func newAccountWithId(accountID, userID, domain string) *Account {
 		NameServerGroups: nameServersGroups,
 		DNSSettings:      dnsSettings,
 		Settings: &Settings{
-			PeerLoginExpirationEnabled: true,
-			PeerLoginExpiration:        DefaultPeerLoginExpiration,
-			GroupsPropagationEnabled:   true,
-			RegularUsersViewBlocked:    true,
+			PeerLoginExpirationEnabled:		 true,
+			PeerLoginExpiration:			 DefaultPeerLoginExpiration,
+			PeerInactivityExpirationEnabled: true,
+			PeerInactivityExpiration: 		 DefaultPeerInactivityExpiration,
+			GroupsPropagationEnabled:   	 true,
+			RegularUsersViewBlocked:    	 true,
 		},
 	}
 
