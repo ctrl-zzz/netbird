@@ -558,7 +558,8 @@ func (a *Account) GetNextInactivePeerExpiration() (time.Duration, bool) {
 	return *nextExpiry, true
 }
 
-// GetPeersWithInactivityPeers returns a list of peers that have Peer.InactivityExpirationEnabled set to true and that were added by a user
+// GetPeersWithInactivity
+// returns a list of peers that have Peer.InactivityExpirationEnabled set to true and that were added by a user
 func (a *Account) GetPeersWithInactivity() []*nbpeer.Peer {
 	peers := make([]*nbpeer.Peer, 0)
 	for _, peer := range a.Peers {
@@ -1133,6 +1134,7 @@ func (am *DefaultAccountManager) checkAndSchedulePeerLoginExpiration(account *Ac
 	}
 }
 
+// peerInactivityExpirationJob marks login expired for all inactive peers and returns the minimum duration in which the next peer of the account will expire by inactivity if found
 func (am *DefaultAccountManager) peerInactivityExpirationJob(accountID string) func() (time.Duration, bool) {
 	return func() (time.Duration, bool) {
 		unlock := am.Store.AcquireAccountWriteLock(accountID)
@@ -1161,6 +1163,7 @@ func (am *DefaultAccountManager) peerInactivityExpirationJob(accountID string) f
 	}
 }
 
+// checkAndSchedulePeerInactivityExpiration periodically checks for inactive peers to end their sessions
 func (am *DefaultAccountManager) checkAndSchedulePeerInactivityExpiration(account *Account) {
 	am.peerInactivityExpiry.Cancel([]string{account.Id})
 	if nextRun, ok := account.GetNextInactivePeerExpiration(); ok {
